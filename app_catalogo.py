@@ -1,58 +1,42 @@
 import streamlit as st
 import pandas as pd
 
-# Configuração da página com foco em UX
 st.set_page_config(
-    page_title="Catálogo Técnico de Produtos | CFS",
-    page_icon="🧪",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_title="Resumo de FT | CFS",
+    page_icon="📄",
+    layout="centered"
 )
 
 # -------------------------------------------------------------------------
-# CAMADA DE SEGURANÇA: Sistema de Login com Sessão e Streamlit Secrets
+# LOGIN SIMPLIFICADO E À PROVA DE ERROS (Não trava se Secrets estiver vazio)
 # -------------------------------------------------------------------------
 def verificar_autenticacao():
     if st.session_state.get("autenticado", False):
         return True
 
-    # Busca a senha nos Secrets da nuvem; usa fallback padrão caso ainda não configurado
-    senha_correta = st.secrets.get("SENHA_ACESSO", "cfs2026")
+    try:
+        senha_correta = st.secrets["SENHA_ACESSO"]
+    except Exception:
+        senha_correta = "cfs2026"
 
-    st.markdown("<br><br>", unsafe_allow_html=True)
-    col_esq, col_centro, col_dir = st.columns([1, 1.2, 1])
-    
-    with col_centro:
-        st.subheader("🔒 Acesso Restrito | Catálogo Técnico")
-        st.caption("Insira a credencial corporativa para consultar as fichas técnicas e garantias.")
-        
-        with st.form("form_login"):
-            senha_digitada = st.text_input("Senha de Acesso:", type="password")
-            btn_entrar = st.form_submit_button("Entrar", use_container_width=True)
-            
-            if btn_entrar:
-                if senha_digitada == senha_correta:
-                    st.session_state["autenticado"] = True
-                    st.rerun()
-                else:
-                    st.error("❌ Senha incorreta. Tente novamente.")
+    st.subheader("🔒 Acesso Restrito | Resumo de FT")
+    with st.form("form_login"):
+        senha_digitada = st.text_input("Senha de Acesso:", type="password")
+        if st.form_submit_button("Entrar", use_container_width=True):
+            if senha_digitada == senha_correta:
+                st.session_state["autenticado"] = True
+                st.rerun()
+            else:
+                st.error("❌ Senha incorreta.")
     return False
 
 if not verificar_autenticacao():
     st.stop()
 
-# Estilização CSS customizada
-st.markdown("""
-    <style>
-    .block-container { padding-top: 1.5rem; padding-bottom: 2rem; }
-    div[data-testid="stMetricValue"] { font-size: 1.4rem; }
-    </style>
-""", unsafe_allow_html=True)
-
 # -------------------------------------------------------------------------
-# CAMADA DE DADOS: Conexão em Tempo Real com o Google Sheets (Cache de 5 min)
+# CARREGAMENTO DAS ABAS DA PLANILHA
 # -------------------------------------------------------------------------
-SHEET_ID = "102Q3VkPmHuErDCeb73Jfe3NA6xxjyyEleO7ALzbnREQ"
+SHEET_URL_BASE = "https://docs.google.com/spreadsheets/d/102Q3VkPmHuErDCeb73Jfe3NA6xxjyyEleO7ALzbnREQ/gviz/tq?tqx=out:csv&sheet="
 
 CATEGORIAS_ABAS = [
     "AnOx Tradicionais",
@@ -65,178 +49,100 @@ CATEGORIAS_ABAS = [
 
 @st.cache_data(ttl=300)
 def carregar_aba(nome_aba):
-    url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet={nome_aba.replace(' ', '%20')}"
+    url = f"{SHEET_URL_BASE}{nome_aba.replace(' ', '%20')}"
     try:
-        df = pd.read_csv(url)
-        df = df.dropna(how="all")
+        df = pd.read_csv(url).dropna(how="all")
         df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
-        df = df.fillna("-")
-        return df
+        return df.fillna("-")
     except Exception:
         return pd.DataFrame()
 
 # -------------------------------------------------------------------------
-# BARRA LATERAL: Navegação, Filtros e Botão de Logout
+# INTERFACE DE CONSULTA DIRETA (RESUMO DA FT)
 # -------------------------------------------------------------------------
-st.sidebar.title("🧪 Consulta Técnica")
-st.sidebar.caption("Fichas Técnicas & Garantias em Tempo Real")
+st.title("📄 Resumo de Ficha Técnica")
 
-aba_selecionada = st.sidebar.selectbox("📂 Linha de Produtos:", CATEGORIAS_ABAS)
+col_linha, col_busca = st.columns([1, 1])
 
-df_original = carregar_aba(aba_selecionada)
+with col_linha:
+    aba_selecionada = st.selectbox("1️⃣ Escolha a Linha:", CATEGORIAS_ABAS)
 
-if df_original.empty:
-    st.warning(f"⚠️ Não foi possível carregar os dados da aba '{aba_selecionada}'. Verifique se a planilha está compartilhada como 'Qualquer pessoa com o link pode ver' e se o nome da aba está exato.")
+df = carregar_aba(aba_selecionada)
+
+if df.empty:
+    st.warning("⚠️ Não foi possível carregar os dados desta aba. Verifique o compartilhamento da planilha.")
     st.stop()
 
-col_produto = df_original.columns[0]
-col_estado = "Estado" if "Estado" in df_original.columns else None
-col_comp = "Composição" if "Composição" in df_original.columns else None
+col_produto = df.columns[0]
+col_estado = "Estado" if "Estado" in df.columns else None
+col_comp = "Composição" if "Composição" in df.columns else None
+colunas_ativos = [c for c in df.columns if c not in [col_produto, col_estado, col_comp]]
 
-colunas_ativos = [
-    c for c in df_original.columns 
-    if c not in [col_produto, col_estado, col_comp]
-]
+with col_busca:
+    filtro_nome = st.text_input("🔍 Filtrar nome ou ativo (opcional):", placeholder="Ex: 578, BHA, Líquido...")
 
-st.sidebar.divider()
-st.sidebar.subheader("🎯 Filtros Rápidos")
+df_filtrado = df.copy()
+if filtro_nome:
+    mascara = df_filtrado.astype(str).apply(
+        lambda x: x.str.lower().str.contains(filtro_nome.lower(), na=False)
+    ).any(axis=1)
+    df_filtrado = df_filtrado[mascara]
 
-if col_estado:
-    estados_disponiveis = ["Todos"] + sorted([str(x) for x in df_original[col_estado].unique() if str(x) != "-"])
-    filtro_estado = st.sidebar.radio("Estado Físico:", estados_disponiveis, horizontal=True)
-else:
-    filtro_estado = "Todos"
+if df_filtrado.empty:
+    st.info("Nenhum produto encontrado com esse termo.")
+    st.stop()
 
-ativos_selecionados = st.sidebar.multiselect(
-    "Contém o(s) Ativo(s):",
-    options=colunas_ativos,
-    help="Filtra apenas produtos que possuem garantia ou presença do ativo selecionado."
+produto_escolhido = st.selectbox(
+    "2️⃣ Selecione o Produto:",
+    df_filtrado[col_produto].tolist()
 )
 
-col_btn1, col_btn2 = st.sidebar.columns(2)
-with col_btn1:
-    if st.button("🔄 Atualizar", use_container_width=True):
-        st.cache_data.clear()
-        st.rerun()
-with col_btn2:
-    if st.button("🚪 Sair", use_container_width=True):
-        st.session_state["autenticado"] = False
-        st.rerun()
-
-# -------------------------------------------------------------------------
-# APLICAÇÃO DOS FILTROS
-# -------------------------------------------------------------------------
-df_filtrado = df_original.copy()
-
-st.title(f"🧪 Catálogo Técnico: {aba_selecionada}")
-
-busca_texto = st.text_input(
-    "🔍 Buscar por nome do produto, ativo ou veículo na composição (ex: Xtendra 578, BHT, Sílica, Óleo):",
-    placeholder="Digite para filtrar instantaneamente..."
-)
-
-if filtro_estado != "Todos" and col_estado:
-    df_filtrado = df_filtrado[df_filtrado[col_estado].astype(str) == filtro_estado]
-
-for ativo in ativos_selecionados:
-    df_filtrado = df_filtrado[
-        ~df_filtrado[ativo].astype(str).str.strip().isin(["-", "", "nan", "Ausente"])
-    ]
-
-if busca_texto:
-    termos = busca_texto.lower().split()
-    for termo in termos:
-        mascara = df_filtrado.astype(str).apply(
-            lambda x: x.str.lower().str.contains(termo, na=False)
-        ).any(axis=1)
-        df_filtrado = df_filtrado[mascara]
-
-col_m1, col_m2, col_m3 = st.columns(3)
-col_m1.metric("Produtos Encontrados", f"{len(df_filtrado)} de {len(df_original)}")
-if col_estado:
-    qtd_po = len(df_filtrado[df_filtrado[col_estado].astype(str).str.contains("Pó", case=False, na=False)])
-    qtd_liq = len(df_filtrado[df_filtrado[col_estado].astype(str).str.contains("Líquido", case=False, na=False)])
-    col_m2.metric("Opções em Pó / Flocos", qtd_po)
-    col_m3.metric("Opções Líquidas", qtd_liq)
+linha = df_filtrado[df_filtrado[col_produto] == produto_escolhido].iloc[0]
 
 st.divider()
 
 # -------------------------------------------------------------------------
-# EXPERIÊNCIA DO USUÁRIO (3 Modos de Visualização)
+# EXIBIÇÃO DO RESUMO DA FT
 # -------------------------------------------------------------------------
-tab_ficha, tab_comp, tab_tabela = st.tabs([
-    "📇 Ficha Rápida & WhatsApp",
-    "⚖️ Comparador Lado a Lado",
-    "📋 Tabela Geral"
-])
+st.subheader(f"📌 {linha[col_produto]}")
+st.caption(f"Categoria: {aba_selecionada}")
 
-with tab_ficha:
-    if df_filtrado.empty:
-        st.info("Nenhum produto encontrado com os filtros atuais.")
-    else:
-        lista_produtos = df_filtrado[col_produto].tolist()
-        prod_escolhido = st.selectbox("Selecione o Produto para ver o Resumo Executivo:", lista_produtos)
-        
-        linha = df_filtrado[df_filtrado[col_produto] == prod_escolhido].iloc[0]
-        
-        col_card, col_copy = st.columns([3, 2])
-        
-        with col_card:
-            st.subheader(f"📌 {linha[col_produto]}")
-            if col_estado:
-                st.markdown(f"**Estado Físico:** `{linha[col_estado]}`")
-            
-            st.markdown("#### Garantias / Princípios Ativos:")
-            ativos_presentes = []
-            for ativo in colunas_ativos:
-                valor = str(linha[ativo]).strip()
-                if valor not in ["-", "", "nan"]:
-                    st.markdown(f"- **{ativo}:** {valor}")
-                    ativos_presentes.append(f"• {ativo}: {valor}")
-            
-            if not ativos_presentes:
-                st.write("*Sem ativos específicos destacados nas colunas padrão.*")
-                
-            if col_comp:
-                st.markdown("#### Composição Básica:")
-                st.info(linha[col_comp])
-                
-        with col_copy:
-            st.markdown("##### 📲 Texto Pronto para WhatsApp / E-mail")
-            st.caption("Clique no ícone de copiar no canto superior direito da caixa abaixo:")
-            
-            texto_zap = f"*{linha[col_produto]}* ({aba_selecionada})\n"
-            if col_estado:
-                texto_zap += f"▪ *Estado Físico:* {linha[col_estado]}\n"
-            if ativos_presentes:
-                texto_zap += "▪ *Ativos / Garantias:*\n" + "\n".join(ativos_presentes) + "\n"
-            if col_comp:
-                texto_zap += f"▪ *Composição:* {linha[col_comp]}"
-                
-            st.code(texto_zap, language="markdown")
+if col_estado:
+    st.markdown(f"**Estado Físico:** `{linha[col_estado]}`")
 
-with tab_comp:
-    st.markdown("Selecione de **2 a 4 produtos** da lista filtrada para comparar suas garantias e veículos lado a lado:")
-    prods_comparar = st.multiselect(
-        "Produtos para comparar:",
-        options=df_filtrado[col_produto].tolist(),
-        default=df_filtrado[col_produto].tolist()[:2] if len(df_filtrado) >= 2 else df_filtrado[col_produto].tolist(),
-        max_selections=4
-    )
-    
-    if len(prods_comparar) >= 2:
-        df_comp = df_filtrado[df_filtrado[col_produto].isin(prods_comparar)].set_index(col_produto).T
-        st.dataframe(df_comp, use_container_width=True)
-    else:
-        st.info("Selecione pelo menos 2 produtos acima para gerar a matriz comparativa.")
+st.markdown("#### 🧪 Garantias / Princípios Ativos")
+ativos_presentes = []
+for ativo in colunas_ativos:
+    valor = str(linha[ativo]).strip()
+    if valor not in ["-", "", "nan", "Ausente"]:
+        st.markdown(f"- **{ativo}:** {valor}")
+        ativos_presentes.append(f"• {ativo}: {valor}")
 
-with tab_tabela:
-    st.dataframe(df_filtrado, use_container_width=True, hide_index=True)
-    
-    csv_export = df_filtrado.to_csv(index=False).encode("utf-8-sig")
-    st.download_button(
-        label="📥 Baixar Tabela Filtrada (CSV/Excel)",
-        data=csv_export,
-        file_name=f"catalogo_{aba_selecionada.lower().replace(' ', '_')}.csv",
-        mime="text/csv"
-    )
+if not ativos_presentes:
+    st.write("*Sem níveis de garantia destacados em colunas específicas.*")
+
+if col_comp:
+    st.markdown("#### 📋 Composição Básica")
+    st.info(linha[col_comp])
+
+# Bloco pronto para copiar
+with st.expander("📲 Copiar Resumo (WhatsApp / E-mail)", expanded=True):
+    texto_resumo = f"*{linha[col_produto]}* ({aba_selecionada})\n"
+    if col_estado:
+        texto_resumo += f"▪ *Estado Físico:* {linha[col_estado]}\n"
+    if ativos_presentes:
+        texto_resumo += "▪ *Garantias / Ativos:*\n" + "\n".join(ativos_presentes) + "\n"
+    if col_comp:
+        texto_resumo += f"▪ *Composição:* {linha[col_comp]}"
+    st.code(texto_resumo, language="markdown")
+
+st.divider()
+col_b1, col_b2 = st.columns(2)
+with col_b1:
+    if st.button("🔄 Atualizar Planilha", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+with col_b2:
+    if st.button("🚪 Sair", use_container_width=True):
+        st.session_state["autenticado"] = False
+        st.rerun()

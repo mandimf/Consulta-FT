@@ -37,7 +37,7 @@ if not verificar_autenticacao():
 # CARREGAMENTO DA NOVA PLANILHA (FLAT TABLE)
 # -------------------------------------------------------------------------
 NEW_SHEET_ID = "1W0PABYfFBY8rU8_h9Z8wPXvBUz8mFYaVRzv0PcAPYE8"
-URL_FLAT_TABLE = f"https://docs.google.com/spreadsheets/d/{NEW_SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Base_FT"
+URL_FLAT_TABLE = f"https://docs.google.com/spreadsheets/d/1W0PABYfFBY8rU8_h9Z8wPXvBUz8mFYaVRzv0PcAPYE8"
 
 @st.cache_data(ttl=300)
 def carregar_dados():

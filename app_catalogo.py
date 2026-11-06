@@ -8,9 +8,9 @@ st.set_page_config(
     layout="centered"
 )
 
-# -------------------------------------------------------------------------
-# 1. AUTENTICAÇÃO BLINDADA (À prova de TOMLDecodeError)
-# -------------------------------------------------------------------------
+# ---------------------------------------------------------
+# 1. AUTENTICAÇÃO BLINDADA
+# ---------------------------------------------------------
 def verificar_autenticacao():
     if st.session_state.get("autenticado", False):
         return True
@@ -36,12 +36,13 @@ def verificar_autenticacao():
 if not verificar_autenticacao():
     st.stop()
 
-# -------------------------------------------------------------------------
-# 2. ENGENHARIA DE DADOS: LEITURA E NORMALIZAÇÃO AUTOMÁTICA
-# -------------------------------------------------------------------------
-# Configurado para ler a base consolidada de 91 produtos via link público CSV
-# Também pode ser sobrescrito via Secrets (SHEET_CSV_URL) se desejar
-DEFAULT_CSV_URL = "https://docs.google.com/spreadsheets/d/1B-qyvNzkGi3FQJr92zVH_eaulh8YXZain7KoeTUecP4/export?format=csv"
+# ---------------------------------------------------------
+# 2. LEITURA E NORMALIZAÇÃO AUTOMÁTICA
+# ---------------------------------------------------------
+URL_PARTE_1 = "https://docs.google.com/spreadsheets/d/"
+URL_PARTE_2 = "1B-qyvNzkGi3FQJr92zVH_eaulh8YXZain7KoeTUecP4"
+URL_PARTE_3 = "/export?format=csv"
+DEFAULT_CSV_URL = URL_PARTE_1 + URL_PARTE_2 + URL_PARTE_3
 
 @st.cache_data(ttl=300)
 def carregar_base():
@@ -57,17 +58,69 @@ def carregar_base():
     df = df.fillna("-")
 
     if "Produto" in df.columns:
-        df = df[~df["Produto"].str.strip().isin(["", "-", "nan"])]
+        filtro_validos = ~df["Produto"].str.strip().isin(["", "-", "nan"])
+        df = df[filtro_validos]
 
     return df
 
 def extrair_dicionario_ativos(row, df_cols):
-    """
-    Suporta tanto o modelo de 7 colunas (Principios_Ativos_Garantias separados por '|')
-    quanto o modelo Wide Flat Table (várias colunas de ativos).
-    """
     ativos_dict = {}
-    valores_invalidos = {"-", "--", "---", "", "nan", "none", "ausente", "e"}
+    invalidos = {"-", "--", "---", "", "nan", "none", "ausente", "e"}
+    col_garantias = "Principios_Ativos_Garantias"
 
-    if "Principios_Ativos_Garantias" in df_cols:
-        texto_bruto = str(row.get("Principios_Ativos_Garant
+    if col_garantias in df_cols:
+        bruto = str(row.get(col_garantias, "-")).strip()
+        if bruto.lower() not in invalidos:
+            partes = [p.strip() for p in bruto.split("|") if p.strip()]
+            for parte in partes:
+                if ":" in parte:
+                    k, v = parte.split(":", 1)
+                    k_limpo, v_limpo = k.strip(), v.strip()
+                    if v_limpo.lower() not in invalidos:
+                        ativos_dict[k_limpo] = v_limpo
+                else:
+                    if parte.lower() not in invalidos:
+                        ativos_dict["Garantia / Ativo"] = parte
+    else:
+        colunas_meta = {
+            "ID_Produto", "Categoria", "Marca_Linha", "Produto",
+            "Estado_Fisico", "Estado", "Composicao", "Composição",
+            "Observacoes"
+        }
+        for col in df_cols:
+            if col not in colunas_meta:
+                val = str(row.get(col, "-")).strip()
+                if val.lower() not in invalidos:
+                    ativos_dict[col.replace("_", " ")] = val
+
+    return ativos_dict
+
+# ---------------------------------------------------------
+# 3. CARREGAMENTO EM MEMÓRIA
+# ---------------------------------------------------------
+try:
+    df_base = carregar_base()
+except Exception:
+    st.error("⚠️ Erro ao ler planilha. Verifique se o link é público.")
+    st.stop()
+
+if df_base.empty:
+    st.warning("⚠️ A base de dados está vazia ou inacessível.")
+    st.stop()
+
+col_est = "Estado_Fisico" if "Estado_Fisico" in df_base.columns else "Estado"
+if col_est not in df_base.columns:
+    col_est = None
+
+col_comp = "Composicao" if "Composicao" in df_base.columns else "Composição"
+if col_comp not in df_base.columns:
+    col_comp = None
+
+mapa_ativos = []
+ativos_unicos = set()
+
+for _, row in df_base.iterrows():
+    d_ativos = extrair_dicionario_ativos(row, df_base.columns)
+    mapa_ativos.append(d_ativos)
+    for k in d_ativos.keys():
+        nome_limpo = re.sub(r"\s*%\s

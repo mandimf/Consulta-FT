@@ -8,7 +8,7 @@ st.set_page_config(
 )
 
 # -------------------------------------------------------------------------
-# LOGIN SIMPLIFICADO E À PROVA DE ERROS (Não trava se Secrets estiver vazio)
+# LOGIN SIMPLIFICADO E À PROVA DE ERROS
 # -------------------------------------------------------------------------
 def verificar_autenticacao():
     if st.session_state.get("autenticado", False):
@@ -51,8 +51,14 @@ CATEGORIAS_ABAS = [
 def carregar_aba(nome_aba):
     url = f"{SHEET_URL_BASE}{nome_aba.replace(' ', '%20')}"
     try:
-        df = pd.read_csv(url).dropna(how="all")
+        df = pd.read_csv(url)
+        df = df.dropna(how="all")
         df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+        
+        if not df.empty:
+            col_prod = df.columns[0]
+            df = df[df[col_prod].notna() & (df[col_prod].astype(str).str.strip() != "-")]
+            
         return df.fillna("-")
     except Exception:
         return pd.DataFrame()
@@ -62,7 +68,7 @@ def carregar_aba(nome_aba):
 # -------------------------------------------------------------------------
 st.title("📄 Resumo de Ficha Técnica")
 
-col_linha, col_busca = st.columns([1, 1])
+col_linha, col_estado_filtro = st.columns(2)
 
 with col_linha:
     aba_selecionada = st.selectbox("1️⃣ Escolha a Linha:", CATEGORIAS_ABAS)
@@ -78,22 +84,24 @@ col_estado = "Estado" if "Estado" in df.columns else None
 col_comp = "Composição" if "Composição" in df.columns else None
 colunas_ativos = [c for c in df.columns if c not in [col_produto, col_estado, col_comp]]
 
-with col_busca:
-    filtro_nome = st.text_input("🔍 Filtrar nome ou ativo (opcional):", placeholder="Ex: 578, BHA, Líquido...")
+# Filtro por Estado (Pó, Líquido, etc.)
+estados_disponiveis = ["Todos"]
+if col_estado:
+    estados_disponiveis += sorted([str(x) for x in df[col_estado].unique() if str(x) not in ["-", "", "nan"]])
+
+with col_estado_filtro:
+    filtro_estado_escolhido = st.selectbox("2️⃣ Filtrar por Estado Físico:", estados_disponiveis)
 
 df_filtrado = df.copy()
-if filtro_nome:
-    mascara = df_filtrado.astype(str).apply(
-        lambda x: x.str.lower().str.contains(filtro_nome.lower(), na=False)
-    ).any(axis=1)
-    df_filtrado = df_filtrado[mascara]
+if filtro_estado_escolhido != "Todos" and col_estado:
+    df_filtrado = df_filtrado[df_filtrado[col_estado].astype(str).str.strip() == filtro_estado_escolhido]
 
 if df_filtrado.empty:
-    st.info("Nenhum produto encontrado com esse termo.")
+    st.info("Nenhum produto encontrado para este estado físico.")
     st.stop()
 
 produto_escolhido = st.selectbox(
-    "2️⃣ Selecione o Produto:",
+    "3️⃣ Selecione o Produto:",
     df_filtrado[col_produto].tolist()
 )
 
@@ -125,7 +133,6 @@ if col_comp:
     st.markdown("#### 📋 Composição Básica")
     st.info(linha[col_comp])
 
-# Bloco pronto para copiar
 with st.expander("📲 Copiar Resumo (WhatsApp / E-mail)", expanded=True):
     texto_resumo = f"*{linha[col_produto]}* ({aba_selecionada})\n"
     if col_estado:

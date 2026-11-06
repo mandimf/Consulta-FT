@@ -10,7 +10,7 @@ st.set_page_config(
 )
 
 # -------------------------------------------------------------------------
-# LOGIN SIMPLIFICADO E À PROVA DE ERROS
+# CAMADA DE SEGURANÇA (LOGIN)
 # -------------------------------------------------------------------------
 def verificar_autenticacao():
     if st.session_state.get("autenticado", False):
@@ -36,7 +36,7 @@ if not verificar_autenticacao():
     st.stop()
 
 # -------------------------------------------------------------------------
-# CARREGAMENTO E PARSING ROBUSTO VIA JSON (Evita quebras de CSV)
+# LEITURA E LIMPEZA ROBUSTA DOS DADOS (JSON GVIZ)
 # -------------------------------------------------------------------------
 SHEET_ID = "102Q3VkPmHuErDCeb73Jfe3NA6xxjyyEleO7ALzbnREQ"
 
@@ -59,7 +59,7 @@ def carregar_aba(nome_aba):
             json_str = text.split("setResponse(")[1].rsplit(");", 1)[0]
             data = json.loads(json_str)
             
-            cols = [col.get('label', f'Col{i}') for i, col in enumerate(data['table']['cols'])]
+            cols = [col.get('label', f'Col{i}').strip() for i, col in enumerate(data['table']['cols'])]
             rows_data = []
             for r in data['table']['rows']:
                 row_vals = [cell.get('v', '') if cell else '' for cell in r.get('c', [])]
@@ -68,10 +68,10 @@ def carregar_aba(nome_aba):
             df = pd.DataFrame(rows_data, columns=cols)
             df = df.loc[:, df.columns != '']
             df = df.dropna(how="all")
-            df.columns = df.columns.str.strip()
             
             if not df.empty:
                 col_prod = df.columns[0]
+                # Remove linhas vazias ou traços
                 df = df[df[col_prod].notna() & (df[col_prod].astype(str).str.strip() != "") & (df[col_prod].astype(str).str.strip() != "-")]
                 
             return df.fillna("-")
@@ -92,7 +92,7 @@ if df.empty:
     st.warning("⚠️ Não foi possível carregar os dados desta aba. Verifique o compartilhamento da planilha.")
     st.stop()
 
-# Identificar colunas principais
+# Identificação inteligente das colunas
 col_produto = df.columns[0]
 col_estado = None
 for col in df.columns:
@@ -109,11 +109,12 @@ for col in df.columns:
 colunas_ativos = [c for c in df.columns if c not in [col_produto, col_estado, col_comp] and c is not None]
 
 # -------------------------------------------------------------------------
-# FILTRO POR ESTADO FÍSICO (Pó, Líquido, etc.)
+# FILTRO POR ESTADO FÍSICO
 # -------------------------------------------------------------------------
 df_filtrado = df.copy()
 
 if col_estado:
+    # Extrai valores únicos reais para montar o filtro do selectbox
     estados_unicos = sorted(list(set([str(x).strip() for x in df[col_estado].unique() if str(x).strip() not in ["-", "", "nan"] and not pd.isna(x)])))
     estados_disponiveis = ["Todos"] + estados_unicos
     
@@ -134,24 +135,26 @@ produto_escolhido = st.selectbox(
     df_filtrado[col_produto].tolist()
 )
 
+# Extração da linha exata correspondente ao produto selecionado
 linha = df_filtrado[df_filtrado[col_produto] == produto_escolhido].iloc[0]
 
 st.divider()
 
 # -------------------------------------------------------------------------
-# EXIBIÇÃO DO RESUMO DA FT
+# EXIBIÇÃO DO RESUMO DA FT (Limpo, sem duplicações de texto)
 # -------------------------------------------------------------------------
 st.subheader(f"📌 {linha[col_produto]}")
 st.caption(f"Categoria: {aba_selecionada}")
 
 if col_estado:
-    st.markdown(f"**Estado Físico:** `{linha[col_estado]}`")
+    st.markdown(f"**Estado Físico:** `{str(linha[col_estado]).strip()}`")
 
 st.markdown("#### 🧪 Garantias / Princípios Ativos")
 ativos_presentes = []
 for ativo in colunas_ativos:
     valor = str(linha[ativo]).strip()
-    if valor and valor not in ["-", "", "nan", "Ausente"]:
+    # Filtra valores válidos e evita lixo/traços
+    if valor and valor not in ["-", "", "nan", "Ausente", "NaN"]:
         st.markdown(f"- **{ativo}:** {valor}")
         ativos_presentes.append(f"• {ativo}: {valor}")
 
@@ -160,17 +163,17 @@ if not ativos_presentes:
 
 if col_comp:
     st.markdown("#### 📋 Composição Básica")
-    st.info(linha[col_comp])
+    st.info(str(linha[col_comp]).strip())
 
 # Bloco pronto para copiar
 with st.expander("📲 Copiar Resumo (WhatsApp / E-mail)", expanded=True):
     texto_resumo = f"*{linha[col_produto]}* ({aba_selecionada})\n"
     if col_estado:
-        texto_resumo += f"▪ *Estado Físico:* {linha[col_estado]}\n"
+        texto_resumo += f"▪ *Estado Físico:* {str(linha[col_estado]).strip()}\n"
     if ativos_presentes:
         texto_resumo += "▪ *Garantias / Ativos:*\n" + "\n".join(ativos_presentes) + "\n"
     if col_comp:
-        texto_resumo += f"▪ *Composição:* {linha[col_comp]}"
+        texto_resumo += f"▪ *Composição:* {str(linha[col_comp]).strip()}"
     st.code(texto_resumo, language="markdown")
 
 st.divider()

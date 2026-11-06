@@ -1,5 +1,7 @@
 import streamlit as st
 import pandas as pd
+import requests
+import json
 
 st.set_page_config(
     page_title="Resumo de FT | CFS",
@@ -34,9 +36,9 @@ if not verificar_autenticacao():
     st.stop()
 
 # -------------------------------------------------------------------------
-# CARREGAMENTO E NORMALIZAÇÃO DOS DADOS DA PLANILHA
+# CARREGAMENTO E PARSING ROBUSTO VIA JSON (Evita quebras de CSV)
 # -------------------------------------------------------------------------
-SHEET_URL_BASE = "https://docs.google.com/spreadsheets/d/102Q3VkPmHuErDCeb73Jfe3NA6xxjyyEleO7ALzbnREQ/gviz/tq?tqx=out:csv&sheet="
+SHEET_ID = "102Q3VkPmHuErDCeb73Jfe3NA6xxjyyEleO7ALzbnREQ"
 
 CATEGORIAS_ABAS = [
     "AnOx Tradicionais",
@@ -49,25 +51,33 @@ CATEGORIAS_ABAS = [
 
 @st.cache_data(ttl=300)
 def carregar_aba(nome_aba):
-    url = f"{SHEET_URL_BASE}{nome_aba.replace(' ', '%20')}"
+    url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:json&sheet={nome_aba.replace(' ', '%20')}"
     try:
-        df = pd.read_csv(url)
-        # Remove linhas totalmente vazias
-        df = df.dropna(how="all")
-        # Remove colunas vazias ou Unnamed
-        df = df.loc[:, ~df.columns.str.contains('^Unnamed', case=False)]
-        
-        # Limpar os nomes das colunas (remover espaços extras)
-        df.columns = df.columns.str.strip()
-        
-        if not df.empty:
-            col_prod = df.columns[0]
-            # Remove linhas inválidas ou traços no nome do produto
-            df = df[df[col_prod].notna() & (df[col_prod].astype(str).str.strip() != "-")]
+        response = requests.get(url)
+        text = response.text
+        if "setResponse(" in text:
+            json_str = text.split("setResponse(")[1].rsplit(");", 1)[0]
+            data = json.loads(json_str)
             
-        return df.fillna("-")
+            cols = [col.get('label', f'Col{i}') for i, col in enumerate(data['table']['cols'])]
+            rows_data = []
+            for r in data['table']['rows']:
+                row_vals = [cell.get('v', '') if cell else '' for cell in r.get('c', [])]
+                rows_data.append(row_vals)
+                
+            df = pd.DataFrame(rows_data, columns=cols)
+            df = df.loc[:, df.columns != '']
+            df = df.dropna(how="all")
+            df.columns = df.columns.str.strip()
+            
+            if not df.empty:
+                col_prod = df.columns[0]
+                df = df[df[col_prod].notna() & (df[col_prod].astype(str).str.strip() != "") & (df[col_prod].astype(str).str.strip() != "-")]
+                
+            return df.fillna("-")
     except Exception:
-        return pd.DataFrame()
+        pass
+    return pd.DataFrame()
 
 # -------------------------------------------------------------------------
 # INTERFACE DO APLICATIVO
@@ -82,7 +92,7 @@ if df.empty:
     st.warning("⚠️ Não foi possível carregar os dados desta aba. Verifique o compartilhamento da planilha.")
     st.stop()
 
-# Identificar dinamicamente as colunas importantes ignorando maiúsculas/minúsculas
+# Identificar colunas principais
 col_produto = df.columns[0]
 col_estado = None
 for col in df.columns:
@@ -104,7 +114,6 @@ colunas_ativos = [c for c in df.columns if c not in [col_produto, col_estado, co
 df_filtrado = df.copy()
 
 if col_estado:
-    # Extrair lista única de estados limpos
     estados_unicos = sorted(list(set([str(x).strip() for x in df[col_estado].unique() if str(x).strip() not in ["-", "", "nan"] and not pd.isna(x)])))
     estados_disponiveis = ["Todos"] + estados_unicos
     
@@ -125,13 +134,12 @@ produto_escolhido = st.selectbox(
     df_filtrado[col_produto].tolist()
 )
 
-# Obter linha exata do produto escolhido
 linha = df_filtrado[df_filtrado[col_produto] == produto_escolhido].iloc[0]
 
 st.divider()
 
 # -------------------------------------------------------------------------
-# EXIBIÇÃO DO RESUMO DA FT (Limpo e sem duplicações)
+# EXIBIÇÃO DO RESUMO DA FT
 # -------------------------------------------------------------------------
 st.subheader(f"📌 {linha[col_produto]}")
 st.caption(f"Categoria: {aba_selecionada}")
@@ -143,7 +151,7 @@ st.markdown("#### 🧪 Garantias / Princípios Ativos")
 ativos_presentes = []
 for ativo in colunas_ativos:
     valor = str(linha[ativo]).strip()
-    if valor and valor not in ["-", "", "nan", "Ausente", "nan"]:
+    if valor and valor not in ["-", "", "nan", "Ausente"]:
         st.markdown(f"- **{ativo}:** {valor}")
         ativos_presentes.append(f"• {ativo}: {valor}")
 
@@ -162,8 +170,7 @@ with st.expander("📲 Copiar Resumo (WhatsApp / E-mail)", expanded=True):
     if ativos_presentes:
         texto_resumo += "▪ *Garantias / Ativos:*\n" + "\n".join(ativos_presentes) + "\n"
     if col_comp:
-        texto_resuumo_val = str(linha[col_comp])
-        texto_resumo += f"▪ *Composição:* {texto_resuumo_val}"
+        texto_resumo += f"▪ *Composição:* {linha[col_comp]}"
     st.code(texto_resumo, language="markdown")
 
 st.divider()
